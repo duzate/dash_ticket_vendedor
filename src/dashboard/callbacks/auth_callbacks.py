@@ -13,37 +13,66 @@ from sqlalchemy import text
 from auth import authenticate_user
 from data_provider import get_dw_engine
 from layouts.login import login_layout
-from layouts.dashboard import create_layout
+import logging
+from layouts.dashboard import get_dashboard_shell, get_page_content
 
 log = logging.getLogger(__name__)
-
 
 def register_auth_callbacks() -> None:
 
     @dash.callback(
         Output("page-container", "children"),
         Input("url", "pathname"),
+        State("page-container", "children"),
     )
-    def display_page(pathname: str):
-        """Roteia entre login e dashboard com base na autenticação."""
-        is_auth = getattr(current_user, "is_authenticated", False)
-        if pathname == "/login":
-            return login_layout
-        if is_auth:
-            seller_name = None
-            if current_user.role.upper() == "SELLER" and current_user.seller_id:
-                try:
-                    with get_dw_engine().connect() as conn:
-                        row = conn.execute(
-                            text("SELECT nome_vendedor FROM dim_vendedor WHERE id_vendedor = :id"),
-                            {"id": current_user.seller_id},
-                        ).fetchone()
-                        if row:
-                            seller_name = row.nome_vendedor
-                except Exception:
-                    log.warning("Não foi possível buscar nome do vendedor para seller_id=%s", current_user.seller_id)
-            return create_layout(current_user, seller_name=seller_name)
-        return dcc.Location(pathname="/login", id="redirect-to-login")
+    def display_page(pathname: str, current_children):
+        """Roteia entre login e dashboard, mantendo a casca se possível."""
+        try:
+            is_auth = getattr(current_user, "is_authenticated", False)
+            
+            # 1. Tratar Login
+            if pathname == "/login":
+                return login_layout
+            
+            # 2. Tratar Dashboard (Autenticado)
+            if is_auth:
+                seller_name = None
+                if current_user.role.upper() == "SELLER" and current_user.seller_id:
+                    try:
+                        with get_dw_engine().connect() as conn:
+                            row = conn.execute(
+                                text("SELECT nome_vendedor FROM dim_vendedor WHERE id_vendedor = :id"),
+                                {"id": current_user.seller_id},
+                            ).fetchone()
+                            if row:
+                                seller_name = row.nome_vendedor
+                    except Exception:
+                        pass
+
+                # Verifica se a casca do dashboard já está carregada
+                has_shell = False
+                if current_children and isinstance(current_children, dict):
+                    if current_children.get('props', {}).get('id') == 'dashboard-wrapper':
+                        has_shell = True
+                elif current_children and hasattr(current_children, 'id') and current_children.id == 'dashboard-wrapper':
+                    has_shell = True
+
+                if not has_shell:
+                    # Carrega a casca inteira pela primeira vez
+                    title = "Sales Performance" if pathname == "/" else "TOP 10 Rankings"
+                    content = get_page_content(pathname)
+                    return get_dashboard_shell(current_user, seller_name, title=title, content=content)
+                
+                # Se já tem a casca, NÃO ATUALIZA o page-container.
+                # O callback interno em dashboard_callbacks cuidará do resto.
+                return dash.no_update
+
+            # 3. Redirecionar para login se não autenticado
+            return dcc.Location(pathname="/login", id="redirect-to-login")
+
+        except Exception as e:
+            log.exception("Erro crítico no roteamento: %s", e)
+            return html.Div([dbc.Alert(f"Erro: {str(e)}", color="danger")])
 
     @dash.callback(
         Output("url", "pathname", allow_duplicate=True),

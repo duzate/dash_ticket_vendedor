@@ -56,6 +56,13 @@ app = dash.Dash(
     update_title=None,
 )
 
+# Desabilita ferramentas de debug na UI e checagem de props para remover popups de erro
+# app.enable_dev_tools(
+#     debug=False,
+#     ui=False,
+#     props_check=False
+# )
+
 server = app.server
 server.secret_key = os.environ.get("FLASK_SECRET_KEY", "sankhya-dashboard-2026-change-me")
 
@@ -71,9 +78,17 @@ def load_user(user_id: str):
 
 
 # ─── Layout base ─────────────────────────────────────────────────────────────
+# O layout base agora contém o "Shell" (barra lateral e área de conteúdo) 
+# de forma persistente. Apenas o conteúdo interno é trocado, garantindo fluidez.
 app.layout = html.Div(id="root", children=[
     dcc.Location(id="url", refresh=False),
-    html.Div(id="page-container"),
+    dcc.Store(id="sidebar-state", data="expanded", storage_type="local"),
+    
+    # Container Principal
+    html.Div(id="page-container", children=[
+        # O Shell do Dashboard será injetado aqui pelo display_page
+        # mas manteremos a estrutura interna estável.
+    ]),
 ])
 
 # ─── Registro de Callbacks ────────────────────────────────────────────────────

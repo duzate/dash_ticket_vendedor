@@ -1,0 +1,8 @@
+[Unit]
+Description=ETL Pipeline Retroativo Timer - Executa as 02:00 AM
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -157,7 +157,10 @@ def filter_sellers_by_role(user: User, all_sellers: list[dict]) -> list[dict]:
     - SELLER  → acesso apenas a si mesmo.
     """
     role_upper = user.role.upper()
-    if role_upper == "ADMIN" or role_upper == "MANAGER":
+    if role_upper == "ADMIN":
+        return all_sellers
+    if role_upper == "MANAGER":
+        # Sellers already filtered by company_id in the DB query
         return all_sellers
     if role_upper == "SELLER":
         return [s for s in all_sellers if s["id"] == user.seller_id]

@@ -13,13 +13,20 @@ import dash
 import pandas as pd
 import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
-from dash import Input, Output, html
+from dash import Input, Output, State, html
 from flask_login import current_user
 from sqlalchemy import text
 
-from data_provider import get_dw_engine, get_sellers, query_sales_performance
+from data_provider import (
+    get_available_competencias,
+    get_dw_engine,
+    query_sales_performance,
+    get_rankings,
+    get_sellers
+)
 from auth import filter_sellers_by_role
 from utils.formatters import fmt_brl, fmt_brl_compact, fmt_pct
+from layouts.dashboard import get_page_content
 from components.kpi_card import PLOTLY_LAYOUT_BASE
 
 log = logging.getLogger(__name__)
@@ -162,6 +169,162 @@ def _load_users_list() -> list:
 
 def register_dashboard_callbacks() -> None:
 
+    # ─── NAVEGAÇÃO INTERNA (FLUIDEZ) ───────────────────────────────────────────
+    @dash.callback(
+        [
+            Output("dashboard-inner-content", "children"),
+            Output("page-title-header", "children")
+        ],
+        Input("url", "pathname"),
+    )
+    def update_dashboard_inner_content(pathname):
+        """Atualiza apenas o conteúdo interno quando a URL muda dentro do dashboard."""
+        if pathname == "/login":
+            return dash.no_update, dash.no_update
+        
+        title = "Sales Performance" if pathname == "/" else "TOP 10 Rankings"
+        return get_page_content(pathname), title
+
+    # ─── SIDEBAR TOGGLE ────────────────────────────────────────────────────────
+    @dash.callback(
+        Output("sidebar-state", "data"),
+        Input("sidebar-toggle", "n_clicks"),
+        State("sidebar-state", "data"),
+        prevent_initial_call=True
+    )
+    def toggle_sidebar(n, current_state):
+        if n:
+            return "collapsed" if current_state == "expanded" else "expanded"
+        return current_state
+
+    # Callback CLIENTSIDE para atualização instantânea das classes
+    # Isso evita o "pulo" de layout (glitch) ao navegar entre páginas com a sidebar colapsada.
+    dash.clientside_callback(
+        """
+        function(state) {
+            const sidebarClass = state === "collapsed" ? "sidebar collapsed" : "sidebar";
+            const contentClass = state === "collapsed" ? "content-area collapsed" : "content-area";
+            return [sidebarClass, contentClass];
+        }
+        """,
+        Output("sidebar", "className"),
+        Output("content-area", "className"),
+        Input("sidebar-state", "data")
+    )
+
+    @dash.callback(
+        [
+            Output("rank-list-clientes", "children"),
+            Output("rank-total-clientes", "children"),
+            Output("rank-list-marcas",   "children"),
+            Output("rank-total-marcas",   "children"),
+            Output("rank-list-produtos", "children"),
+            Output("rank-total-produtos", "children"),
+        ],
+        [
+            Input("competencia-dropdown", "value"),
+            Input("company-dropdown", "value"),
+            Input("active-seller-dropdown", "value")
+        ],
+    )
+    def update_rankings_data(competence, company, seller):
+        if not getattr(current_user, "is_authenticated", False) or not competence:
+            return [[]] * 6
+        
+        try:
+            # Extrai a data de referência
+            _, _, dt_ref = competence.split("|")
+            
+            # Normaliza filtros
+            cid = company[0] if isinstance(company, list) and company else company
+            vid = seller[0] if isinstance(seller, list) and seller else (seller or 0)
+
+            role_upper = current_user.role.upper()
+            if role_upper == "SELLER":
+                vid = current_user.seller_id
+                # SELLER usa cid=0 (suas metas são consolidadas) sem acesso global
+                cid_for_ranking = 0
+            elif role_upper == "MANAGER":
+                if not current_user.managed_sellers:
+                    return [[]] * 6
+                if cid and cid in current_user.managed_sellers:
+                    # Filial específica selecionada e autorizada
+                    cid_for_ranking = cid
+                else:
+                    # Nenhuma filial selecionada → usa lista de managed_sellers (sem expor ranking global)
+                    cid_for_ranking = current_user.managed_sellers
+            else:
+                # ADMIN: usa cid selecionado ou 0 (global)
+                cid_for_ranking = cid if cid else 0
+
+            data = get_rankings(dt_ref, vid, cid_for_ranking)
+            
+            def build_items(items, color, is_client=False, is_brand=False, is_product=False):
+                list_elements = []
+                total = 0
+                for item in items:
+                    val = float(item['valor'])
+                    total += val
+                    
+                    props = {"className": "d-flex align-items-center justify-content-between ranking-item mb-2 rounded-3"}
+                    if is_client and 'id_item' in item:
+                        props['id'] = {'type': 'client-rank-item', 'index': int(item['id_item'])}
+                        props['style'] = {'cursor': 'pointer', 'transition': 'transform 0.2s'}
+                        props['className'] += " client-clickable-item"
+                        props['n_clicks'] = 0
+                    elif is_brand and 'id_item' in item:
+                        props['id'] = {'type': 'brand-rank-item', 'index': int(item['id_item'])}
+                        props['style'] = {'cursor': 'pointer', 'transition': 'transform 0.2s'}
+                        props['className'] += " brand-clickable-item"
+                        props['n_clicks'] = 0
+                        
+                    if is_product:
+                        refforn = item.get('refforn', '')
+                        complemento = item.get('complemento', '')
+                        subtitle_parts = []
+                        if refforn:
+                            subtitle_parts.append(f"REF: {refforn}")
+                        if complemento:
+                            subtitle_parts.append(f"COMP: {complemento}")
+                        subtitle_text = " | ".join(subtitle_parts) if subtitle_parts else ""
+                        
+                        name_and_sub = html.Div(className="d-flex flex-column ms-3 text-truncate", style={'flex': '1', 'minWidth': '0'}, children=[
+                            html.Span(item['label_item'], className="fw-bold text-truncate", style={'maxWidth': '100%'}),
+                            html.Span(subtitle_text, className="text-muted small text-truncate", style={'fontSize': '0.72rem', 'maxWidth': '100%'})
+                        ]) if subtitle_text else html.Span(item['label_item'], className="ms-3 fw-bold text-truncate", style={'flex': '1', 'minWidth': '0', 'maxWidth': '100%'})
+                        
+                        list_elements.append(
+                            html.Div(**props, children=[
+                                html.Div(className="d-flex align-items-center", style={'flex': '1', 'minWidth': '0', 'marginRight': '10px'}, children=[
+                                    html.Div(str(item['posicao']), className=f"rank-badge bg-{color}"),
+                                    name_and_sub
+                                ]),
+                                html.Span(fmt_brl(val), className="fw-bold small", style={'flexShrink': '0'})
+                            ])
+                        )
+                    else:
+                        list_elements.append(
+                            html.Div(**props, children=[
+                                html.Div(className="d-flex align-items-center", style={'flex': '1', 'minWidth': '0', 'marginRight': '10px'}, children=[
+                                    html.Div(str(item['posicao']), className=f"rank-badge bg-{color}"),
+                                    html.Span(item['label_item'], className="ms-3 fw-bold text-truncate", style={'flex': '1', 'minWidth': '0', 'maxWidth': '100%'})
+                                ]),
+                                html.Span(fmt_brl(val), className="fw-bold small", style={'flexShrink': '0'})
+                            ])
+                        )
+                if not list_elements:
+                    list_elements = [html.P("Sem dados para este ciclo", className="text-muted small p-3")]
+                return list_elements, fmt_brl(total)
+
+            cli_list, cli_total = build_items(data.get("CLIENTE", []), "primary", is_client=True)
+            mar_list, mar_total = build_items(data.get("MARCA", []), "success", is_brand=True)
+            pro_list, pro_total = build_items(data.get("PRODUTO", []), "warning", is_product=True)
+
+            return cli_list, cli_total, mar_list, mar_total, pro_list, pro_total
+        except Exception:
+            log.exception("Erro ao carregar rankings.")
+            return [[]] * 6
+
     @dash.callback(
         Output("active-seller-dropdown", "options"),
         [Input("competencia-dropdown", "value"), Input("company-dropdown", "value")],
@@ -169,14 +332,21 @@ def register_dashboard_callbacks() -> None:
     def update_seller_options(competencia: Optional[str], company_id: Optional[int]) -> list:
         if not getattr(current_user, "is_authenticated", False) or not competencia:
             return []
-        
-        if current_user.role.upper() == "MANAGER":
-            if not company_id or company_id not in current_user.managed_sellers:
-                return []
 
         try:
             start, end, _ = competencia.split("|")
-            sellers = get_sellers(start, end, company_id)
+            
+            if current_user.role.upper() == "MANAGER":
+                if company_id:
+                    if company_id not in current_user.managed_sellers:
+                        return [] # Tentou acessar filial não permitida
+                    cid_filter = company_id
+                else:
+                    cid_filter = current_user.managed_sellers
+            else:
+                cid_filter = company_id
+                
+            sellers = get_sellers(start, end, cid_filter)
             allowed = filter_sellers_by_role(current_user, sellers)
             return [{"label": f"{s['id']} · {s['name']}", "value": s["id"]} for s in allowed]
         except Exception:
@@ -224,18 +394,28 @@ def register_dashboard_callbacks() -> None:
         if not getattr(current_user, "is_authenticated", False) or not competence:
             return _empty_state()
             
-        if current_user.role.upper() == "MANAGER":
-            if not company_id or company_id not in current_user.managed_sellers:
-                return _empty_state()
-
         try:
             start, end, dt_ref = competence.split("|")
 
             role_upper = current_user.role.upper()
-            target_id  = current_user.seller_id if role_upper == "SELLER" else active_seller_id
-            filtro_ids = [target_id] if target_id else None
+            
+            # Enforce company filter for manager
+            if role_upper == "MANAGER":
+                if company_id:
+                    if company_id not in current_user.managed_sellers:
+                        return _empty_state()
+                    cid_filter = company_id
+                else:
+                    cid_filter = current_user.managed_sellers
+            else:
+                cid_filter = company_id
 
-            df_daily, _, cards = query_sales_performance(filtro_ids, start, end, company_id)
+            if role_upper == "SELLER":
+                filtro_ids = [current_user.seller_id]
+            else:
+                filtro_ids = [active_seller_id] if active_seller_id else None
+
+            df_daily, _, cards = query_sales_performance(filtro_ids, start, end, cid_filter)
             log.info("Query Results: df_daily=%d rows | realizado=%s", len(df_daily), cards.get("realizado"))
 
             # ── Período completo com meta diária ─────────────────────────────
@@ -421,3 +601,256 @@ def register_dashboard_callbacks() -> None:
         except Exception:
             log.exception("Erro ao salvar usuário.")
             return dbc.Alert("Erro ao salvar no banco.", color="danger")
+
+    # ─── CLIENT PROFILE MODAL CALLBACK ───────────────────────────────────────
+    @dash.callback(
+        [Output("client-profile-modal", "is_open"), Output("client-profile-content", "children")],
+        [Input({"type": "client-rank-item", "index": dash.ALL}, "n_clicks"),
+         Input("close-client-profile", "n_clicks")],
+        [State("competencia-dropdown", "value"), State("company-dropdown", "value"), State("active-seller-dropdown", "value")],
+        prevent_initial_call=True
+    )
+    def open_client_profile(n_clicks_list, close_clicks, competence, company, seller):
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            return dash.no_update, dash.no_update
+
+        trigger_id_str = ctx.triggered[0]["prop_id"].split(".")[0]
+        if "close-client-profile" in trigger_id_str:
+            return False, dash.no_update
+
+        # Verifica se algum clique foi realmente > 0
+        if not any(c is not None and c > 0 for c in n_clicks_list):
+            return dash.no_update, dash.no_update
+
+        trigger_id_str = ctx.triggered[0]["prop_id"].split(".")[0]
+        try:
+            trigger_id = json.loads(trigger_id_str)
+            client_id = int(trigger_id["index"])
+        except Exception:
+            return dash.no_update, dash.no_update
+            
+        if not competence:
+            return True, html.P("Selecione uma competência.")
+            
+        # Pega a data base
+        _, _, dt_ref = competence.split("|")
+        cid = company[0] if isinstance(company, list) and company else (company or 0)
+        vid = seller[0] if isinstance(seller, list) and seller else (seller or 0)
+        
+        role_upper = getattr(current_user, "role", "").upper()
+        if role_upper == "SELLER":
+            vid = current_user.seller_id
+        elif role_upper == "MANAGER":
+            if cid not in current_user.managed_sellers:
+                if current_user.managed_sellers:
+                    cid = current_user.managed_sellers[0]
+                else:
+                    return True, html.P("Sem permissão para esta filial.")
+        
+        from data_provider import get_client_profile
+        profile = get_client_profile(dt_ref, client_id, cid, vid)
+        
+        # Monta o layout
+        top_prods = profile.get('top_produtos', [])
+        top_vends = profile.get('top_vendedores', [])
+        t_medio = profile.get('tempo_medio_compra', 0)
+        
+        # Cabecalho do cliente com gradiente sutil e avatar moderno
+        header_card = html.Div(className="client-profile-header mb-4 p-3 rounded-4 d-flex align-items-center gap-3", style={
+            "background": "linear-gradient(135deg, rgba(96, 165, 250, 0.15), rgba(30, 41, 59, 0.3))",
+            "border": "1px solid rgba(255, 255, 255, 0.08)",
+            "backdrop-filter": "blur(10px)"
+        }, children=[
+            html.Div(className="profile-avatar-large d-flex align-items-center justify-content-center bg-primary bg-opacity-25 rounded-circle", style={
+                "width": "50px", "height": "50px", "border": "2px solid rgba(96, 165, 250, 0.3)", "flex-shrink": 0
+            }, children=[
+                html.I(className="fa-solid fa-building text-primary h4 mb-0")
+            ]),
+            html.Div([
+                html.H5(profile.get("nome_cliente", f"Cliente #{client_id}"), className="mb-1 fw-bold text-white", style={"font-size": "1.15rem"}),
+                html.Div(className="d-flex align-items-center gap-2", children=[
+                    html.Span(f"ID: {client_id}", className="badge bg-secondary bg-opacity-50 text-white-50 px-2 py-0.5 rounded-pill", style={"font-size": "10px"}),
+                    html.Span("Últimos 6 meses de movimentações", className="text-muted extra-small")
+                ])
+            ])
+        ])
+
+        # Grid de Produtos (Col 1)
+        max_prod_val = max([p['valor'] for p in top_prods]) if top_prods else 1
+        prod_items = []
+        for p in top_prods:
+            pct = (p['valor'] / max_prod_val) * 100
+            refforn = p.get('refforn', '')
+            complemento = p.get('complemento', '')
+            subtitle_parts = []
+            if refforn:
+                subtitle_parts.append(f"REF: {refforn}")
+            if complemento:
+                subtitle_parts.append(f"COMP: {complemento}")
+            subtitle_text = " | ".join(subtitle_parts) if subtitle_parts else ""
+            
+            prod_items.append(html.Div(className="mb-3", children=[
+                html.Div(className="d-flex flex-column mb-1", children=[
+                    html.Span(p['nome'], className="fw-semibold text-truncate text-white-50", style={"font-size": "0.82rem", "max-width": "100%"}),
+                    html.Span(subtitle_text, className="text-muted small text-truncate", style={"font-size": "0.72rem", "max-width": "100%"}) if subtitle_text else None
+                ]),
+                dbc.Progress(value=pct, color="primary", style={"height": "5px", "background": "rgba(255, 255, 255, 0.05)"}, className="rounded-pill")
+            ]))
+        
+        prod_col = dbc.Col(xs=12, md=7, children=[
+            html.Div(className="glass-card p-4 h-100", children=[
+                html.H6([html.I(className="fa-solid fa-box-open me-2 text-primary"), "Top 5 Produtos Comprados"], className="fw-bold mb-4 text-white d-flex align-items-center", style={"font-size": "0.9rem"}),
+                html.Div(prod_items) if top_prods else html.P("Nenhum produto registrado no período.", className="text-muted small py-4 text-center")
+            ])
+        ])
+
+        # Grid de Vendedores (Col 2)
+        max_vend_val = max([v['valor'] for v in top_vends]) if top_vends else 1
+        vend_items = []
+        for v in top_vends:
+            pct = (v['valor'] / max_vend_val) * 100
+            vend_items.append(html.Div(className="mb-3", children=[
+                html.Div(className="mb-1", children=[
+                    html.Span(v['nome'], className="fw-semibold text-truncate text-white-50", style={"font-size": "0.82rem"}),
+                ]),
+                dbc.Progress(value=pct, color="success", style={"height": "5px", "background": "rgba(255, 255, 255, 0.05)"}, className="rounded-pill")
+            ]))
+
+        # Tempo Médio de Recompra (Hero Card)
+        t_card = html.Div(className="glass-card p-3 mb-3 text-center d-flex flex-column align-items-center justify-content-center", style={
+            "background": "linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(15, 23, 42, 0.6))"
+        }, children=[
+            html.Div(className="bg-warning-soft mb-2 rounded-circle d-flex align-items-center justify-content-center", style={"width": "42px", "height": "42px", "background": "rgba(245, 158, 11, 0.15)"}, children=[
+                html.I(className="fa-solid fa-clock-rotate-left text-warning h5 mb-0")
+            ]),
+            html.Span("Tempo Médio de Recompra", className="text-muted extra-small fw-semibold uppercase mb-1", style={"letter-spacing": "0.05em"}),
+            html.H3(f"{t_medio:.1f} dias" if t_medio > 0 else "N/A", className="fw-extrabold text-warning mb-1", style={"font-size": "1.75rem", "font-family": "var(--font-display)"}),
+            html.P("Frequência média entre pedidos novos.", className="text-white-50 extra-small mb-0")
+        ])
+
+        v_card = html.Div(className="glass-card p-4", children=[
+            html.H6([html.I(className="fa-solid fa-user-tie me-2 text-success"), "Top Vendedores"], className="fw-bold mb-4 text-white d-flex align-items-center", style={"font-size": "0.9rem"}),
+            html.Div(vend_items) if top_vends else html.P("Nenhum vendedor registrado.", className="text-muted small py-2 text-center")
+        ])
+
+        side_col = dbc.Col(xs=12, md=5, children=[
+            t_card,
+            v_card
+        ])
+
+        content = html.Div([
+            header_card,
+            dbc.Row([
+                prod_col,
+                side_col
+            ], className="g-3")
+        ])
+        
+        return True, content
+
+    # ─── BRAND PROFILE MODAL CALLBACK ────────────────────────────────────────
+    @dash.callback(
+        [Output("brand-profile-modal", "is_open"), Output("brand-profile-content", "children")],
+        [Input({"type": "brand-rank-item", "index": dash.ALL}, "n_clicks"),
+         Input("close-brand-profile", "n_clicks")],
+        [State("competencia-dropdown", "value"), State("company-dropdown", "value"), State("active-seller-dropdown", "value")],
+        prevent_initial_call=True
+    )
+    def open_brand_profile(n_clicks_list, close_clicks, competence, company, seller):
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            return dash.no_update, dash.no_update
+
+        trigger_id_str = ctx.triggered[0]["prop_id"].split(".")[0]
+        if "close-brand-profile" in trigger_id_str:
+            return False, dash.no_update
+
+        # Verifica se algum clique foi realmente > 0
+        if not any(c is not None and c > 0 for c in n_clicks_list):
+            return dash.no_update, dash.no_update
+
+        try:
+            trigger_id = json.loads(trigger_id_str)
+            brand_id = int(trigger_id["index"])
+        except Exception:
+            return dash.no_update, dash.no_update
+            
+        if not competence:
+            return True, html.P("Selecione uma competência.")
+            
+        # Pega a data base
+        _, _, dt_ref = competence.split("|")
+        cid = company[0] if isinstance(company, list) and company else (company or 0)
+        vid = seller[0] if isinstance(seller, list) and seller else (seller or 0)
+        
+        role_upper = getattr(current_user, "role", "").upper()
+        if role_upper == "SELLER":
+            vid = current_user.seller_id
+        elif role_upper == "MANAGER":
+            if cid not in current_user.managed_sellers:
+                if current_user.managed_sellers:
+                    cid = current_user.managed_sellers[0]
+                else:
+                    return True, html.P("Sem permissão para esta filial.")
+        
+        from data_provider import get_brand_profile
+        profile = get_brand_profile(dt_ref, brand_id, cid, vid)
+        
+        # Monta o layout
+        top_prods = profile.get('top_produtos', [])
+        
+        # Cabecalho da marca com gradiente sutil e avatar moderno
+        header_card = html.Div(className="brand-profile-header mb-4 p-3 rounded-4 d-flex align-items-center gap-3", style={
+            "background": "linear-gradient(135deg, rgba(74, 222, 128, 0.15), rgba(30, 41, 59, 0.3))",
+            "border": "1px solid rgba(255, 255, 255, 0.08)",
+            "backdrop-filter": "blur(10px)"
+        }, children=[
+            html.Div(className="profile-avatar-large d-flex align-items-center justify-content-center bg-success bg-opacity-25 rounded-circle", style={
+                "width": "50px", "height": "50px", "border": "2px solid rgba(74, 222, 128, 0.3)", "flex-shrink": 0
+            }, children=[
+                html.I(className="fa-solid fa-tags text-success h4 mb-0")
+            ]),
+            html.Div([
+                html.H5(profile.get("nome_marca", f"Marca #{brand_id}"), className="mb-1 fw-bold text-white", style={"font-size": "1.15rem"}),
+                html.Div(className="d-flex align-items-center gap-2", children=[
+                    html.Span(f"ID: {brand_id}", className="badge bg-secondary bg-opacity-50 text-white-50 px-2 py-0.5 rounded-pill", style={"font-size": "10px"}),
+                    html.Span("Produtos mais vendidos no período", className="text-muted extra-small")
+                ])
+            ])
+        ])
+
+        # Grid de Produtos
+        max_prod_val = max([p['valor'] for p in top_prods]) if top_prods else 1
+        prod_items = []
+        for p in top_prods:
+            pct = (p['valor'] / max_prod_val) * 100
+            refforn = p.get('refforn', '')
+            complemento = p.get('complemento', '')
+            subtitle_parts = []
+            if refforn:
+                subtitle_parts.append(f"REF: {refforn}")
+            if complemento:
+                subtitle_parts.append(f"COMP: {complemento}")
+            subtitle_text = " | ".join(subtitle_parts) if subtitle_parts else ""
+            
+            prod_items.append(html.Div(className="mb-3", children=[
+                html.Div(className="d-flex flex-column mb-1", children=[
+                    html.Span(p['nome'], className="fw-semibold text-truncate text-white-50", style={"max-width": "100%", "font-size": "0.82rem"}),
+                    html.Span(subtitle_text, className="text-muted small text-truncate", style={"font-size": "0.72rem", "max-width": "100%"}) if subtitle_text else None
+                ]),
+                dbc.Progress(value=pct, color="success", style={"height": "5px", "background": "rgba(255, 255, 255, 0.05)"}, className="rounded-pill")
+            ]))
+        
+        prod_col = html.Div(className="glass-card p-4", children=[
+            html.H6([html.I(className="fa-solid fa-box-open me-2 text-success"), "Top 5 Produtos mais Vendidos da Marca"], className="fw-bold mb-4 text-white d-flex align-items-center", style={"font-size": "0.9rem"}),
+            html.Div(prod_items) if top_prods else html.P("Nenhum produto registrado no período.", className="text-muted small py-4 text-center")
+        ])
+
+        content = html.Div([
+            header_card,
+            prod_col
+        ])
+        
+        return True, content
+

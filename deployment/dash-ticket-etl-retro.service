@@ -1,0 +1,14 @@
+[Unit]
+Description=ETL Pipeline - Retroativo (Mensal) D-60
+After=network.target dash-ticket.service
+
+[Service]
+Type=oneshot
+User=sup
+WorkingDirectory=/home/sup/dash_ticket_vendedor
+Environment=PATH=/home/sup/dash_ticket_vendedor/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=PYTHONPATH=/home/sup/dash_ticket_vendedor
+EnvironmentFile=/home/sup/dash_ticket_vendedor/.env
+ExecStart=/home/sup/dash_ticket_vendedor/venv/bin/python /home/sup/dash_ticket_vendedor/src/data/etl/runner.py --monthly
+StandardOutput=append:/home/sup/dash_ticket_vendedor/logs/etl_retro.log
+StandardError=append:/home/sup/dash_ticket_vendedor/logs/etl_retro.log

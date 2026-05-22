@@ -45,25 +45,29 @@ PLOTLY_LAYOUT_BASE = dict(
 
 # ─── KPI Card Component ───────────────────────────────────────────────────────
 def kpi_card(label, value_id, accent="primary", sub_id=None, icon=None):
-    """Card KPI reutilizável com acento colorido."""
-    icon_el = html.Div(className=f"kpi-icon-container bg-{accent}-soft", children=[
-        html.I(className=f"{icon} text-{accent}", style={'fontSize': '0.9rem'})
-    ]) if icon else None
-
-    header = html.Div(className="d-flex align-items-start justify-content-between", children=[
-        html.Span(label, className="kpi-label"),
-        icon_el,
-    ])
-
-    body = [
-        header,
-        html.Div(id=value_id, className=f"kpi-value text-{accent}", children="---"),
-    ]
-    if sub_id:
-        body.append(html.Span(id=sub_id, className="kpi-sub", children=""))
-
+    """Card KPI com layout refinado para evitar quebras e desalinhamentos."""
     return dbc.Card(
-        dbc.CardBody(body, className="p-0"),
+        dbc.CardBody([
+            # Header: Label + Icon
+            html.Div(className="d-flex justify-content-between align-items-center mb-3", children=[
+                html.Span(label, className="kpi-label"),
+                html.Div(className=f"kpi-icon-lite text-{accent}", children=[
+                    html.I(className=icon)
+                ]) if icon else None
+            ]),
+            
+            # Value Section
+            html.Div([
+                html.Div(id=value_id, className=f"kpi-value text-{accent}", children="---"),
+            ], className="kpi-value-container"),
+            
+            # Footer: Subtitle
+            html.Div(
+                id=sub_id, 
+                className="kpi-sub mt-2", 
+                children=""
+            ) if sub_id else html.Div(className="kpi-sub-spacer mt-2")
+            
+        ], className="p-3"),
         className="kpi-card-premium h-100",
-        style={'padding': '20px'},
     )

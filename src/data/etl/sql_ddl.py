@@ -34,6 +34,26 @@ CREATE TABLE IF NOT EXISTS Dim_Empresa (
     Nome       VARCHAR(200)
 );
 
+CREATE TABLE IF NOT EXISTS Dim_Parceiro (
+    Id_Parceiro   INTEGER PRIMARY KEY,
+    Nome_Parceiro VARCHAR(200)
+);
+
+CREATE TABLE IF NOT EXISTS Dim_Marca (
+    Id_Marca   INTEGER PRIMARY KEY,
+    Nome_Marca VARCHAR(200)
+);
+
+CREATE TABLE IF NOT EXISTS Dim_Produto (
+    Id_Produto   INTEGER PRIMARY KEY,
+    Nome_Produto VARCHAR(200),
+    Refforn      VARCHAR(100),
+    Complemento  VARCHAR(200)
+);
+
+ALTER TABLE Dim_Produto ADD COLUMN IF NOT EXISTS Refforn VARCHAR(100);
+ALTER TABLE Dim_Produto ADD COLUMN IF NOT EXISTS Complemento VARCHAR(200);
+
 -- Períodos fiscais usados no selector de competência do Dashboard
 CREATE TABLE IF NOT EXISTS Dim_Tempo_Ref (
     DtRef  VARCHAR(10) PRIMARY KEY,  -- 'YYYY-MM-DD' data de referência do mês
@@ -66,6 +86,53 @@ CREATE TABLE IF NOT EXISTS Fato_VendasDiarias (
         FOREIGN KEY (Id_Vendedor) REFERENCES Dim_Vendedor(Id_Vendedor),
     CONSTRAINT unique_tempo_vendedor_empresa
         UNIQUE (Id_Tempo, Id_Vendedor, Id_Empresa)
+);
+
+-- ====================================================================
+-- RANKINGS
+-- ====================================================================
+CREATE TABLE IF NOT EXISTS Fato_Rankings (
+    Id_Ranking   SERIAL PRIMARY KEY,
+    DtRef        VARCHAR(10) NOT NULL, -- 'YYYY-MM-DD' (início do mês)
+    Id_Vendedor  INTEGER NOT NULL,
+    Id_Empresa   INTEGER NOT NULL,
+    Tipo         VARCHAR(20) NOT NULL, -- 'CLIENTE', 'MARCA', 'PRODUTO'
+    Id_Item      INTEGER NOT NULL,
+    Valor        NUMERIC(15,2) NOT NULL,
+    Posicao      INTEGER NOT NULL,
+    Label_Item   VARCHAR(200),         -- Nome denormalizado para performance rápida
+    CONSTRAINT unique_rank_ref_vendedor_empresa_tipo_pos
+        UNIQUE (DtRef, Id_Vendedor, Id_Empresa, Tipo, Posicao)
+);
+
+-- ====================================================================
+-- PERFIS DE CLIENTES
+-- ====================================================================
+CREATE TABLE IF NOT EXISTS Fato_Cliente_Perfil (
+    Id_Perfil          SERIAL PRIMARY KEY,
+    DtRef              VARCHAR(10) NOT NULL,
+    Id_Cliente         INTEGER NOT NULL,
+    Id_Empresa         INTEGER NOT NULL,
+    Id_Vendedor        INTEGER NOT NULL DEFAULT 0,
+    Top_Produtos       JSONB,
+    Top_Vendedores     JSONB,
+    Tempo_Medio_Compra NUMERIC(15,2),
+    CONSTRAINT unique_perfil_ref_cliente_empresa_vendedor
+        UNIQUE (DtRef, Id_Cliente, Id_Empresa, Id_Vendedor)
+);
+
+-- ====================================================================
+-- PERFIS DE MARCAS
+-- ====================================================================
+CREATE TABLE IF NOT EXISTS Fato_Marca_Perfil (
+    Id_Perfil          SERIAL PRIMARY KEY,
+    DtRef              VARCHAR(10) NOT NULL,
+    Id_Marca           INTEGER NOT NULL,
+    Id_Empresa         INTEGER NOT NULL,
+    Id_Vendedor        INTEGER NOT NULL DEFAULT 0,
+    Top_Produtos       JSONB,
+    CONSTRAINT unique_perfil_ref_marca_empresa_vendedor
+        UNIQUE (DtRef, Id_Marca, Id_Empresa, Id_Vendedor)
 );
 
 -- ====================================================================
@@ -121,13 +188,35 @@ def prepare_dw(engine):
     ]
 
     with engine.begin() as conn:
+        # Executa DDL padrão
         for stmt in statements:
             try:
                 conn.execute(text(stmt))
             except Exception as e:
                 print(f"[DDL] Aviso (ignorado): {e}")
 
-    print("[DDL] ✓ Schema do DW aplicado com sucesso.")
+        # Executa Migrações para adicionar Id_Vendedor
+        migrations = [
+            # Cliente Perfil
+            "ALTER TABLE fato_cliente_perfil ADD COLUMN IF NOT EXISTS Id_Vendedor INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE fato_cliente_perfil DROP CONSTRAINT IF EXISTS unique_perfil_ref_cliente_empresa",
+            "ALTER TABLE fato_cliente_perfil DROP CONSTRAINT IF EXISTS unique_perfil_ref_cliente_empresa_vendedor",
+            "ALTER TABLE fato_cliente_perfil ADD CONSTRAINT unique_perfil_ref_cliente_empresa_vendedor UNIQUE (DtRef, Id_Cliente, Id_Empresa, Id_Vendedor)",
+            
+            # Marca Perfil
+            "ALTER TABLE fato_marca_perfil ADD COLUMN IF NOT EXISTS Id_Vendedor INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE fato_marca_perfil DROP CONSTRAINT IF EXISTS unique_perfil_ref_marca_empresa",
+            "ALTER TABLE fato_marca_perfil DROP CONSTRAINT IF EXISTS unique_perfil_ref_marca_empresa_vendedor",
+            "ALTER TABLE fato_marca_perfil ADD CONSTRAINT unique_perfil_ref_marca_empresa_vendedor UNIQUE (DtRef, Id_Marca, Id_Empresa, Id_Vendedor)"
+        ]
+        
+        for mig in migrations:
+            try:
+                conn.execute(text(mig))
+            except Exception as e:
+                print(f"[DDL: Migration] Aviso: {e}")
+
+    print("[DDL] ✓ Schema do DW e Migrações aplicados com sucesso.")
 
 
 if __name__ == "__main__":

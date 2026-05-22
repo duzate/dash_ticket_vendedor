@@ -66,6 +66,71 @@ def sync_companies():
     print(f"[SYNC] {len(df_emp)} empresas sincronizadas.")
     oracle_conn.close()
 
+def sync_parceiros():
+    oracle_conn = connect_oracle()
+    pg_engine = connect_postgres_dw()
+    if not oracle_conn: return
+
+    print("[SYNC] Sincronizando Dim_Parceiro...")
+    q = "SELECT CODPARC AS id_parceiro, NOMEPARC AS nome_parceiro FROM SANKHYA.TGFPAR WHERE CLIENTE = 'S'"
+    df = pd.read_sql(q, con=oracle_conn)
+    df.columns = [c.lower() for c in df.columns]
+    
+    with pg_engine.begin() as conn:
+        for idx, row in df.iterrows():
+            conn.execute(text("""
+                INSERT INTO dim_parceiro (id_parceiro, nome_parceiro)
+                VALUES (:id_parceiro, :nome_parceiro)
+                ON CONFLICT (id_parceiro) DO UPDATE SET nome_parceiro = EXCLUDED.nome_parceiro;
+            """), row.to_dict())
+    oracle_conn.close()
+
+def sync_marcas():
+    oracle_conn = connect_oracle()
+    pg_engine = connect_postgres_dw()
+    if not oracle_conn: return
+
+    print("[SYNC] Sincronizando Dim_Marca...")
+    # Tenta buscar de TGFPRO ou de uma tabela de marcas se existir
+    # Aqui vamos usar a denormalização da TGFPRO para simplificar
+    q = "SELECT DISTINCT NVL(CODMARCA, 0) AS id_marca, NVL(MARCA, 'SEM MARCA') AS nome_marca FROM SANKHYA.TGFPRO"
+    df = pd.read_sql(q, con=oracle_conn)
+    df.columns = [c.lower() for c in df.columns]
+    
+    with pg_engine.begin() as conn:
+        for idx, row in df.iterrows():
+            conn.execute(text("""
+                INSERT INTO dim_marca (id_marca, nome_marca)
+                VALUES (:id_marca, :nome_marca)
+                ON CONFLICT (id_marca) DO UPDATE SET nome_marca = EXCLUDED.nome_marca;
+            """), row.to_dict())
+    oracle_conn.close()
+
+def sync_produtos():
+    oracle_conn = connect_oracle()
+    pg_engine = connect_postgres_dw()
+    if not oracle_conn: return
+
+    print("[SYNC] Sincronizando Dim_Produto...")
+    q = "SELECT CODPROD AS id_produto, DESCRPROD AS nome_produto, NVL(REFFORN, '') AS refforn, NVL(COMPLDESC, '') AS complemento FROM SANKHYA.TGFPRO"
+    df = pd.read_sql(q, con=oracle_conn)
+    df.columns = [c.lower() for c in df.columns]
+    
+    with pg_engine.begin() as conn:
+        for idx, row in df.iterrows():
+            conn.execute(text("""
+                INSERT INTO dim_produto (id_produto, nome_produto, refforn, complemento)
+                VALUES (:id_produto, :nome_produto, :refforn, :complemento)
+                ON CONFLICT (id_produto) DO UPDATE SET
+                    nome_produto = EXCLUDED.nome_produto,
+                    refforn      = EXCLUDED.refforn,
+                    complemento  = EXCLUDED.complemento;
+            """), row.to_dict())
+    oracle_conn.close()
+
 if __name__ == "__main__":
     sync_sellers()
     sync_companies()
+    sync_parceiros()
+    sync_marcas()
+    sync_produtos()
