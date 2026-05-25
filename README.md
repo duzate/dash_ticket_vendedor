@@ -285,16 +285,3 @@ tail -f logs/gunicorn_out.log
 tail -f logs/etl_out.log
 tail -f logs/etl_err.log
 ```
-
-### Problemas Frequentes
-
-| Erro | Possível Causa | Resolução |
-|------|----------------|-----------|
-| **Vendedor sumiu (Para Manager)** | O vendedor não está listado em `managed_sellers`. | Logue com admin, vá ao painel de Usuários, selecione o perfil do Manager e vincule o ID do vendedor correto à empresa que ele gerencia. |
-| **Acesso Negado (Login Inválido)** | Usuário desativado (`is_active = FALSE`). | Acesse via Admin, busque o usuário na tela de Gestão e clique no switch (toggle) para reativá-lo. |
-| **ETL não carrega os dados de hoje** | Falha de conectividade com Oracle Sankhya. | Inspecione `logs/etl_err.log`. Verifique as permissões do usuário Oracle no `.env`. |
-| **Porta 8050 in use** | Instância zombie do gunicorn na porta. | `fuser -k 8050/tcp` e execute o `start.sh` novamente. |
-
----
-
-*Desenvolvido internamente para excelência em Sales Performance Analytics.*
