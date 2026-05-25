@@ -175,15 +175,6 @@ tail -f logs/etl_out.log
 docker logs -f dashboard_db
 ```
 
-### ⚠️ Problemas Comuns
-
-| Problema | Causa | Solução |
-|----------|-------|--------|
-| Porta 8050 in use | Gunicorn zombie | `fuser -k 8050/tcp && bash deployment/start.sh` |
-| Conexão PostgreSQL falha | Container parado | `docker-compose up -d` |
-| Usuário não vê dados | Sem vinculação MANAGER-SELLER | Admin: painel de Usuários → vincular |
-| ETL não executa | Oracle indisponível | Verifique `.env` (ERP_DSN, credenciais) |
-
 Para **guia completo de troubleshooting**, veja [SETUP_LOCAL.md](SETUP_LOCAL.md#️-troubleshooting).
 
 ---
