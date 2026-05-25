@@ -141,27 +141,6 @@ bash deployment/start.sh
 - ✅ Docker & Docker Compose
 - ✅ Acesso ao ERP (Oracle) e credenciais em `.env`
 
-**O quAutenticação & Controle de Acesso
-
-Sistema RBAC de **3 níveis** com autenticação baseada em banco de dados:
-
-| Role | Acesso | Caso de Uso |
-|------|--------|-----------|
-| **👑 ADMIN** | Tudo (empresa inteira) | CTO, Gerente Geral |
-| **🧑‍💼 MANAGER** | Seus vendedores | Gerente de Vendas |
-| **👤 SELLER** | Seus dados | Vendedor |
-
-**Exemplos de Filtro:**
-```
-ADMIN   vê: 500 vendedores de todas as regiões
-MANAGER vê: 12 vendedores de seu time
-SELLER  vé: Apenas seus KPIs pessoais
-```
-
-**Conta de Recuperação (Fallback):**
-- **Usuário:** `admin` | **Senha:** `admin123`
-- HardcOperação & Troubleshooting
-
 ### 📝 Logs
 
 ```bash
